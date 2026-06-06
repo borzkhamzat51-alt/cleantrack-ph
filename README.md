@@ -29,7 +29,7 @@ that gap.
 
 ## Live Demo
 
-[Coming soon]
+[https://cleantrack-ph.vercel.app](https://cleantrack-ph.vercel.app)
 
 ## Built by
 
