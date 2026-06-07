@@ -53,7 +53,7 @@ export default function AdminDashboard() {
     setLoading(false)
   }
 
-  useEffect(() => {
+    useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
