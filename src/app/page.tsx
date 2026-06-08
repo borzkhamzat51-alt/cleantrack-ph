@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { supabase, generateTrackingCode } from '@/lib/supabase'
 import dynamic from 'next/dynamic'
-import { MapPin, Camera, AlertTriangle, CheckCircle, Loader2, Trash2, Building2, Waves, Biohazard, Package } from 'lucide-react'
+import { MapPin, Camera, AlertTriangle, CheckCircle, Loader2, Trash2, Building2, Waves, Biohazard, Package, Trophy, Mail } from 'lucide-react'
 
 const Map = dynamic(() => import('@/components/Map'), { ssr: false })
 
@@ -15,7 +15,100 @@ const wasteTypes = [
   { value: 'other', label: 'Other', icon: Package, color: 'text-gray-500' },
 ]
 
+type LeaderboardTab = 'barangay' | 'city' | 'province'
+type LeaderboardEntry = { name: string; count: number }
+
+// ── Leaderboard ────────────────────────────────────────────────────────────────
+function Leaderboard() {
+  const [tab, setTab] = useState<LeaderboardTab>('barangay')
+  const [data, setData] = useState<LeaderboardEntry[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true)
+      const { data: rows } = await supabase.from('reports').select(tab)
+      if (rows) {
+        const counts: Record<string, number> = {}
+        rows.forEach((r: Record<string, any>) => {
+          const key = r[tab]
+          if (key) counts[key] = (counts[key] || 0) + 1
+        })
+        const sorted = Object.entries(counts)
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 10)
+        setData(sorted)
+      }
+      setLoading(false)
+    }
+    fetchData()
+  }, [tab])
+
+  const medals = ['🥇', '🥈', '🥉']
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <Trophy className="w-5 h-5 text-yellow-500" />
+        <div>
+          <h2 className="text-sm font-semibold text-slate-800">Leaderboard</h2>
+          <p className="text-xs text-slate-400">Most active reporting communities</p>
+        </div>
+      </div>
+
+      <div className="flex gap-1 bg-slate-100 rounded-xl p-1 mb-4">
+        {(['barangay', 'city', 'province'] as LeaderboardTab[]).map(t => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`flex-1 text-xs font-semibold py-1.5 rounded-lg capitalize transition-all ${
+              tab === t ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-10 bg-slate-100 rounded-xl animate-pulse" />
+          ))}
+        </div>
+      ) : data.length === 0 ? (
+        <p className="text-xs text-slate-400 text-center py-6">No data yet — submit a report to get on the board!</p>
+      ) : (
+        <div className="space-y-2">
+          {data.map((entry, i) => (
+            <div
+              key={entry.name}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border ${
+                i === 0 ? 'bg-yellow-50 border-yellow-100' :
+                i === 1 ? 'bg-slate-50 border-slate-100' :
+                i === 2 ? 'bg-orange-50 border-orange-100' :
+                'bg-slate-50 border-slate-100'
+              }`}
+            >
+              <span className="text-base w-6 text-center flex-shrink-0">
+                {medals[i] ?? <span className="text-xs text-slate-400 font-bold">{i + 1}</span>}
+              </span>
+              <span className="flex-1 text-sm font-medium text-slate-700 truncate">{entry.name}</span>
+              <span className="text-xs font-bold text-slate-500 bg-white px-2 py-1 rounded-lg border border-slate-200 flex-shrink-0">
+                {entry.count} report{entry.count !== 1 ? 's' : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Home ───────────────────────────────────────────────────────────────────────
 export default function Home() {
+  const [email, setEmail] = useState('')
   const [type, setType] = useState('')
   const [description, setDescription] = useState('')
   const [photo, setPhoto] = useState<File | null>(null)
@@ -29,21 +122,37 @@ export default function Home() {
 
     navigator.geolocation.getCurrentPosition(async (pos) => {
       const { latitude, longitude } = pos.coords
-
       const code = generateTrackingCode()
 
-      const { data, error } = await supabase.from('reports').insert([{
+      let barangay: string | null = null
+      let city: string | null = null
+      let province: string | null = null
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`
+        )
+        const geo = await res.json()
+        const addr = geo.address ?? {}
+        barangay = addr.village ?? addr.suburb ?? addr.neighbourhood ?? null
+        city = addr.city ?? addr.town ?? addr.municipality ?? null
+        province = addr.province ?? addr.state ?? null
+      } catch {
+        // silently ignore geocoding errors
+      }
+
+      const { error } = await supabase.from('reports').insert([{
         type,
         description,
         latitude,
         longitude,
         photo_url: null,
         status: 'pending',
-        tracking_code: code
-      }]).select()
-
-      console.log('data:', data)
-      console.log('error:', error)
+        tracking_code: code,
+        barangay,
+        city,
+        province,
+        reporter_email: email.trim() || null,
+      }])
 
       setLoading(false)
       if (!error) {
@@ -52,8 +161,9 @@ export default function Home() {
         setType('')
         setDescription('')
         setPhoto(null)
+        setEmail('')
       } else {
-        alert('Error: ' + error.message + ' | code: ' + error.code + ' | details: ' + error.details + ' | hint: ' + error.hint)
+        alert('Error: ' + error.message)
       }
     }, () => {
       setLoading(false)
@@ -63,7 +173,6 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-slate-50">
-      {/* Header */}
       <header className="bg-white border-b border-slate-100 px-4 py-4 sticky top-0 z-50 shadow-sm">
         <div className="max-w-2xl mx-auto flex items-center gap-3">
           <div className="w-10 h-10 bg-green-600 rounded-xl flex items-center justify-center shadow">
@@ -80,7 +189,6 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Hero section */}
       <div className="bg-gradient-to-br from-green-700 to-green-500 text-white">
         <div className="max-w-2xl mx-auto px-4 py-10">
           <div className="mb-6">
@@ -96,19 +204,14 @@ export default function Home() {
             </p>
           </div>
           <div className="flex gap-3 mb-8">
-            <a href="#report" className="bg-white text-green-700 font-semibold text-sm px-5 py-2.5 rounded-xl hover:bg-green-50 transition-colors">
-              Submit a report
-            </a>
-            <a href="/admin/login" className="bg-white/20 text-white font-semibold text-sm px-5 py-2.5 rounded-xl hover:bg-white/30 transition-colors border border-white/30">
-              LGU Admin
-            </a>
+            <a href="#report" className="bg-white text-green-700 font-semibold text-sm px-5 py-2.5 rounded-xl hover:bg-green-50 transition-colors">Submit a report</a>
+            <a href="/admin/login" className="bg-white/20 text-white font-semibold text-sm px-5 py-2.5 rounded-xl hover:bg-white/30 transition-colors border border-white/30">LGU Admin</a>
           </div>
           <HeroStats />
         </div>
       </div>
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-5">
-
         {success && trackingCode && (
           <div className="bg-green-50 border border-green-200 rounded-2xl p-4">
             <div className="flex items-center gap-3 mb-3">
@@ -124,10 +227,7 @@ export default function Home() {
                 <p className="text-xl font-bold text-slate-800 tracking-widest">{trackingCode}</p>
               </div>
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(trackingCode)
-                  alert('Tracking code copied!')
-                }}
+                onClick={() => { navigator.clipboard.writeText(trackingCode); alert('Copied!') }}
                 className="bg-green-100 hover:bg-green-200 text-green-700 text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
               >
                 Copy
@@ -136,6 +236,7 @@ export default function Home() {
           </div>
         )}
 
+        {/* Map */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <div>
@@ -147,12 +248,17 @@ export default function Home() {
           <Map />
         </div>
 
+        {/* Leaderboard */}
+        <Leaderboard />
+
         <TrackReport />
 
+        {/* Report form */}
         <div id="report" className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
           <h2 className="text-sm font-semibold text-slate-800 mb-0.5">Submit a report</h2>
           <p className="text-xs text-slate-400 mb-5">Your GPS location will be captured automatically</p>
 
+          {/* Waste type */}
           <div className="mb-4">
             <label className="block text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">Waste type</label>
             <div className="grid grid-cols-1 gap-2">
@@ -172,6 +278,7 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Description */}
           <div className="mb-4">
             <label className="block text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">Description</label>
             <textarea
@@ -183,6 +290,25 @@ export default function Home() {
             />
           </div>
 
+          {/* Email */}
+          <div className="mb-4">
+            <label className="block text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">
+              Email <span className="text-slate-400 normal-case font-normal">(optional — for status updates)</span>
+            </label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="email"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                placeholder="you@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <p className="text-xs text-slate-400 mt-1.5">We'll notify you when your report status changes</p>
+          </div>
+
+          {/* Photo */}
           <div className="mb-5">
             <label className="block text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">
               Photo <span className="text-slate-400 normal-case font-normal">(optional)</span>
@@ -204,11 +330,7 @@ export default function Home() {
             disabled={loading}
             className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white rounded-xl py-3.5 font-semibold text-sm transition-colors flex items-center justify-center gap-2 shadow-sm"
           >
-            {loading ? (
-              <><Loader2 className="w-4 h-4 animate-spin" />Submitting...</>
-            ) : (
-              <><MapPin className="w-4 h-4" />Submit report</>
-            )}
+            {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> Submitting...</> : <><MapPin className="w-4 h-4" /> Submit report</>}
           </button>
         </div>
 
@@ -218,6 +340,7 @@ export default function Home() {
   )
 }
 
+// ── HeroStats ──────────────────────────────────────────────────────────────────
 function HeroStats() {
   const [stats, setStats] = useState({ total: 0, resolved: 0, pending: 0 })
 
@@ -253,9 +376,10 @@ function HeroStats() {
   )
 }
 
+// ── TrackReport ────────────────────────────────────────────────────────────────
 function TrackReport() {
   const [code, setCode] = useState('')
-  const [result, setResult] = useState<any>(null)
+  const [result, setResult] = useState<Record<string, any> | null>(null)
   const [loading, setLoading] = useState(false)
   const [notFound, setNotFound] = useState(false)
 
@@ -284,18 +408,14 @@ function TrackReport() {
       .single()
 
     setLoading(false)
-    if (data) {
-      setResult(data)
-    } else {
-      setNotFound(true)
-    }
+    if (data) setResult(data)
+    else setNotFound(true)
   }
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
       <h2 className="text-sm font-semibold text-slate-800 mb-0.5">Track your report</h2>
       <p className="text-xs text-slate-400 mb-4">Enter your tracking code to check the status</p>
-
       <div className="flex gap-2 mb-4">
         <input
           type="text"
@@ -313,25 +433,32 @@ function TrackReport() {
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Track'}
         </button>
       </div>
-
       {notFound && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-600">
           No report found with that tracking code. Please check and try again.
         </div>
       )}
-
       {result && (
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</span>
-            <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${statusColors[result.status] || statusColors.pending}`}>
+            <span className={`text-xs font-semibold px-3 py-1 rounded-full border ${statusColors[result.status] ?? statusColors.pending}`}>
               {result.status}
             </span>
           </div>
           <p className="text-xs text-slate-600">{statusMessages[result.status]}</p>
           <div className="border-t border-slate-200 pt-3 space-y-1">
             <p className="text-xs text-slate-500"><span className="font-medium">Type:</span> {result.type}</p>
-            <p className="text-xs text-slate-500"><span className="font-medium">Submitted:</span> {new Date(result.created_at).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+            {result.barangay && <p className="text-xs text-slate-500"><span className="font-medium">Barangay:</span> {result.barangay}</p>}
+            {result.city && <p className="text-xs text-slate-500"><span className="font-medium">City:</span> {result.city}</p>}
+            {result.province && <p className="text-xs text-slate-500"><span className="font-medium">Province:</span> {result.province}</p>}
+            <p className="text-xs text-slate-500">
+              <span className="font-medium">Submitted:</span>{' '}
+              {new Date(result.created_at).toLocaleDateString('en-PH', {
+                month: 'short', day: 'numeric', year: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+              })}
+            </p>
             {result.description && <p className="text-xs text-slate-500"><span className="font-medium">Description:</span> {result.description}</p>}
           </div>
         </div>

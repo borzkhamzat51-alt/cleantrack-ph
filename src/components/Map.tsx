@@ -1,6 +1,5 @@
 'use client'
 
-import 'leaflet/dist/leaflet.css'
 import { useEffect, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet'
 import { supabase } from '@/lib/supabase'
@@ -25,14 +24,23 @@ type Report = {
 
 export default function Map() {
   const [reports, setReports] = useState<Report[]>([])
+  const [ready, setReady] = useState(false)
 
   useEffect(() => {
+    // Wipe any stale Leaflet container IDs before mounting
+    document.querySelectorAll('.leaflet-container').forEach((el: any) => {
+      if (el._leaflet_id) delete el._leaflet_id
+    })
+    setReady(true)
+
     const fetchReports = async () => {
       const { data } = await supabase.from('reports').select('*')
       if (data) setReports(data)
     }
     fetchReports()
   }, [])
+
+  if (!ready) return null
 
   return (
     <MapContainer

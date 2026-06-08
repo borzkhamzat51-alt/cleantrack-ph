@@ -14,6 +14,11 @@ type Report = {
   status: string
   photo_url: string | null
   created_at: string
+  barangay: string | null
+  city: string | null
+  province: string | null
+  reporter_email: string | null
+  tracking_code: string
 }
 
 const statusColors: Record<string, string> = {
@@ -53,7 +58,7 @@ export default function AdminDashboard() {
     setLoading(false)
   }
 
-    useEffect(() => {
+  useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
@@ -67,7 +72,39 @@ export default function AdminDashboard() {
 
   const updateStatus = async (id: string, status: string) => {
     setUpdating(id)
+
+    // Update status in DB
     await supabase.from('reports').update({ status }).eq('id', id)
+
+    // Fetch report to get email + tracking info
+    const { data: report } = await supabase
+      .from('reports')
+      .select('reporter_email, tracking_code, type')
+      .eq('id', id)
+      .single()
+
+    // Send email notification if reporter provided email
+    if (report?.reporter_email) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      await fetch('https://vayvcxfnpyuwwziygrkz.supabase.co/functions/v1/notify-status-change', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          reporter_email: report.reporter_email,
+          tracking_code: report.tracking_code,
+          status,
+          type: report.type,
+        }),
+      })
+    } catch {
+      // silently ignore — status update already succeeded
+    }
+  }
+
     await fetchReports()
     setUpdating(null)
   }
@@ -184,15 +221,27 @@ export default function AdminDashboard() {
                         {statusIcons[report.status]}
                         {report.status}
                       </span>
+                      {report.reporter_email && (
+                        <span className="text-xs text-slate-400 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-full">
+                          📧 notifiable
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-slate-500 mb-2 line-clamp-2">
                       {report.description || 'No description provided'}
                     </p>
                     <div className="flex items-center gap-3 text-xs text-slate-400 flex-wrap">
-                      <span className="flex items-center gap-1">
-                        <MapPin className="w-3 h-3" />
-                        {report.latitude.toFixed(4)}, {report.longitude.toFixed(4)}
-                      </span>
+                      {(report.barangay || report.city) ? (
+                        <span className="flex items-center gap-1">
+                          <MapPin className="w-3 h-3" />
+                          {[report.barangay, report.city].filter(Boolean).join(', ')}
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <MapPin className="w-3 h-3" />
+                          {report.latitude.toFixed(4)}, {report.longitude.toFixed(4)}
+                        </span>
+                      )}
                       <span className="flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         {new Date(report.created_at).toLocaleDateString('en-PH', {
